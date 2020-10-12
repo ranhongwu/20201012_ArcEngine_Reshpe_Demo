@@ -257,10 +257,10 @@ namespace GISEditor.EditTool.Tool
             sym.Style = esriSimpleLineStyle.esriSLSSolid;
             sym.Width = 2;
             IRubberBand cutBand = new RubberLineClass();
-            IGeometry cutGeometry = cutBand.TrackNew(screenDisplay, sym as ISymbol);
+            IGeometry reshaprGeometry = cutBand.TrackNew(screenDisplay, sym as ISymbol);
             screenDisplay.StartDrawing(screenDisplay.hDC, (short)esriScreenCache.esriNoScreenCache);
             screenDisplay.SetSymbol(sym as ISymbol);
-            screenDisplay.DrawPolyline(cutGeometry);
+            screenDisplay.DrawPolyline(reshaprGeometry);
             screenDisplay.FinishDrawing();
 
             IFeatureClass featureClass = m_selectedFeature.Class as IFeatureClass;
@@ -269,13 +269,13 @@ namespace GISEditor.EditTool.Tool
             if (!(workspaceEdit.IsBeingEdited())) return;
 
             //分割选择的面要素
-            if (cutGeometry.IsEmpty == true)
+            if (reshaprGeometry.IsEmpty == true)
                 return;
             try
             {
                 IPolyline reshapePolyline,sourcePolyline = null;
-                IPolygon polygon = null;
-                IRing ring = null;
+                IPolygon4 polygon = null;
+                IRing ring=null,innerRing = null,outRing=null;
                 IPath reshapePath = null;
                 IGeometryCollection pathCollection = null;
                 
@@ -283,18 +283,36 @@ namespace GISEditor.EditTool.Tool
                 switch (geometry.GeometryType)
                 {
                     case esriGeometryType.esriGeometryPolygon:
-                        
-                        polygon = geometry as IPolygon;
-                        polygon.QueryExteriorRings(ref ring);
-                        reshapePolyline = cutGeometry as IPolyline;
+                        bool outerSuccess = false, innerSuccess = false;
+                        IGeometryBag innerRingGeometryBag = null;
+                        IGeometryCollection innerRingGeometryCollection = null;
+                        reshapePolyline = reshaprGeometry as IPolyline;
                         pathCollection = reshapePolyline as IGeometryCollection;
                         //只可能产生一条polyline，直接写死
                         reshapePath = pathCollection.Geometry[0] as IPath;
-                        isSuccess = ring.Reshape(reshapePath);
+                        polygon = geometry as IPolygon4;
+                        IGeometryBag exteriorRingGeometryBag = polygon.ExteriorRingBag;
+                        IGeometryCollection exteriorRingGeometryCollection = exteriorRingGeometryBag as IGeometryCollection;
+                        for(int i = 0; i < exteriorRingGeometryCollection.GeometryCount; i++)
+                        {
+                            outRing = exteriorRingGeometryCollection.Geometry[i] as IRing;
+                            bool a= outRing.Reshape(reshapePath);
+                            outerSuccess = outerSuccess|| a;
+
+                            innerRingGeometryBag = polygon.get_InteriorRingBag(outRing);
+                            innerRingGeometryCollection = innerRingGeometryBag as IGeometryCollection;
+                            for(int j = 0; j < innerRingGeometryCollection.GeometryCount; j++)
+                            {
+                                innerRing= innerRingGeometryCollection.Geometry[j] as IRing;
+                                bool b = innerRing.Reshape(reshapePath);
+                                innerSuccess = innerSuccess || b;
+                            }
+                        }
+                        isSuccess = innerSuccess || outerSuccess;
                         break;
                     case esriGeometryType.esriGeometryPolyline:
                         sourcePolyline = geometry as IPolyline;
-                        reshapePolyline = cutGeometry as IPolyline;
+                        reshapePolyline = reshaprGeometry as IPolyline;
                         pathCollection = reshapePolyline as IGeometryCollection;
                         //只可能产生一条polyline，直接写死
                         reshapePath = pathCollection.Geometry[0] as IPath;
@@ -312,15 +330,11 @@ namespace GISEditor.EditTool.Tool
                 }
                 else
                     throw new Exception("重塑要素失败！");
-
-
-                
                 m_activeView.Refresh();
             }
             catch (Exception ex)
             {
                 workspaceEdit.AbortEditOperation();
-                //SysLogHelper.WriteOperationLog("要素分割错误", ex.Source, "数据编辑");
                 MessageBox.Show("分割面要素失败！！" + ex.Message, "信息提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
             m_activeView.PartialRefresh(esriViewDrawPhase.esriViewGeography, null, m_activeView.Extent);
